@@ -1,0 +1,29 @@
+{
+  "id": "example-btcusd",
+  "created_at": "2026-11-16T00:05:00Z",
+  "symbol": "BTC/USD",
+  "direction": "long",
+  "status": "void",
+  "timeframes": {"panoramico": "1W", "principal": "1D", "sincronizacion": "4H"},
+  "fase_panoramico": 3,
+  "evento": 1,
+  "checklist": {
+    "above_6180_after_fase2": "PASS",
+    "rising_highs_and_lows": "PASS",
+    "close_above_directriz_bajista": "PASS",
+    "referente_superado": "PASS",
+    "two_bullish_closes": "PASS",
+    "vacio_ge_2x_risk": "PASS"
+  },
+  "entry": 101575,
+  "target": 109765,
+  "logical_stop": 97900,
+  "stop": 97480,
+  "vacio_disponible": 9000,
+  "balance": 100000,
+  "risk_pct": 0.02,
+  "simultaneous_trades": 1,
+  "qty": 0.488400,
+  "analysis": "FORMAT EXAMPLE ONLY, not an analysis. Numbers are the course risk-workbook check (entry 101,575, TP 109,765, SL 97,480) scaled to a 100k balance.",
+  "log": []
+}

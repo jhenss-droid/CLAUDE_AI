@@ -1,31 +1,48 @@
-# Alpaca paper-trading starter bot
+# Alpaca paper trading under the Trader method
 
-A small, testable bot: daily bars → moving-average crossover signal → risk checks → market order.
-It is **paper-only** (hard-wired in `alpaca_bot/config.py`) and **dry-run by default**.
+Every Alpaca trade in this repository must come from a **Trader skill** (CreceTrader price action) analysis. There is no automatic signal generator. Trade ideas come only from that analysis, and code enforces the method's hard rules.
 
-The strategy is an example, not a recommendation. Replace `alpaca_bot/strategy.py` with your own logic.
+```
+Trader skill analysis ──► trader_plans/<id>.json ──► validate ──► gated order ──► Alpaca (paper)
+```
+
+## How a trade happens
+
+1. Ask Claude for a Trader analysis of the asset, e.g. "Trader: BTC/USD".
+2. If the verdict is a trade, Claude saves the plan to `trader_plans/<id>.json` (format: `trader_plans/README.md`).
+3. `python -m alpaca_bot validate <id>` checks the plan against the rules.
+4. `python -m alpaca_bot execute <id>` shows the orders (dry run); add `--submit` to send them to the paper account.
+   - Crypto: a limit IOC entry, then a GTC stop-limit for the quantity actually filled.
+   - Stocks: a limit bracket order with the stop and target attached.
+
+## What is enforced
+
+`alpaca_bot/trader_plan.py` checks every plan: stop below entry · reward:risk ≥ 2:1 · logical stop not further than the 2:1 stop · vacío disponible ≥ 2 × risk · risk ≤ 2% of the **current** balance (split across simultaneous trades) · all 6 EBT checklist items PASS · evento 1 or 2 · no buying in fases 4–5 · long only.
+
+`.claude/hooks/trader_gate.py` (registered in `.claude/settings.json`) runs before every order Claude Code tries to place, whether through the Alpaca connector, a local Alpaca MCP server, the `alpaca` CLI or a raw API call. It blocks the order unless its `client_order_id` is `ct-<plan_id>-…` and the plan is valid. It also blocks:
+- options
+- replacing an order
+- market buys
+- trailing stops
+- moving the stop
+- raw `/v2/orders` calls
+
+Cancelling orders and closing positions are allowed, because they only reduce risk.
+
+## Limits
+
+The hook applies to Claude Code sessions in this repository. It can't control orders placed:
+- in Alpaca's website or app
+- from claude.ai chats or scheduled tasks outside this repository
+- by other programs that use your keys
 
 ## Run
 
 ```bash
 pip install -r requirements.txt
-python -m pytest -q             # offline tests, no keys needed
-python -m alpaca_bot            # dry run: prints what it would do as JSON
-python -m alpaca_bot --submit   # sends approved orders to the PAPER account
+python -m pytest -q
 ```
 
-Keys come from `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` (see `.env.example`). Never commit them.
+Keys: `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` (paper). When the cloud environment's proxy injects the real keys, set both variables to `proxy-injected`.
 
-## Risk checks (`alpaca_bot/risk.py`)
-
-- No orders when the market is closed or the account is blocked
-- Halts new orders once the day's loss reaches `BOT_MAX_DAILY_LOSS_PCT` (default 2%)
-- Each position is capped at `BOT_MAX_POSITION_PCT` of equity (default 5%) and by buying power
-- At most `BOT_MAX_ORDERS_PER_RUN` orders per run (default 3)
-- Long-only: never doubles up a position, and sells only what it holds (no shorting)
-- Every order carries a unique `client_order_id`, so Alpaca rejects duplicate submissions
-
-## Related tools installed in the cloud environment
-
-- `alpaca` CLI (`go install github.com/alpacahq/cli/cmd/alpaca@latest`)
-- `alpaca-mcp-server` (`uv tool install alpaca-mcp-server`)
+The analysis is one trading framework applied to paper trading, not financial advice.
