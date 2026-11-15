@@ -19,15 +19,22 @@ Trader skill analysis ──► trader_plans/<id>.json ──► validate ──
 
 `alpaca_bot/trader_plan.py` checks every plan: stop below entry · reward:risk ≥ 2:1 · logical stop not further than the 2:1 stop · vacío disponible ≥ 2 × risk · risk ≤ 2% of the **current** balance (split across simultaneous trades) · all 6 EBT checklist items PASS · evento 1 or 2 · no buying in fases 4–5 · long only.
 
-`.claude/hooks/trader_gate.py` (registered in `.claude/settings.json`) runs before every order Claude Code tries to place, whether through the Alpaca connector, a local Alpaca MCP server, the `alpaca` CLI or a raw API call. It blocks the order unless its `client_order_id` is `ct-<plan_id>-…` and the plan is valid. It also blocks:
-- options
-- replacing an order
-- market buys
-- trailing stops
-- moving the stop
-- raw `/v2/orders` calls
+`.claude/hooks/trader_gate.py` (registered in `.claude/settings.json`) runs before every order Claude Code tries to place, whether through the Alpaca connector, a local Alpaca MCP server, the `alpaca` CLI or a raw API call. It blocks the order unless its `client_order_id` is `ct-<plan_id>-…` and the plan is valid. Order quantity can't exceed the plan's 2%-risk size, and a limit entry must be within 1% of the plan's entry.
 
-Cancelling orders and closing positions are allowed, because they only reduce risk.
+These order types are **allowed**, each still tied to a plan. Turn any of them off in `POLICY` at the top of `alpaca_bot/gate.py`:
+
+| Switch | What it allows |
+|---|---|
+| `options` | Option orders and spreads on the plan's underlying. Contracts are capped by the plan's `max_contracts` when it sets one |
+| `replace_orders` | Changing an order after it's placed |
+| `market_buys` | Market entries, sized by qty or a dollar amount within the plan's size |
+| `trailing_stops` | Trailing-stop sells |
+| `moving_stops` | Stops away from the plan's stop |
+| `raw_api_orders` | Direct `/v2/orders` calls. When the order JSON is in the command, it gets the full checks; otherwise it must at least name a valid plan |
+
+Options and trailing stops aren't covered by the Trader course, and the course says not to move stops or objectives. These switches are your choice to go beyond the method.
+
+Cancelling orders and closing positions are always allowed, because they only reduce risk.
 
 ## Limits
 

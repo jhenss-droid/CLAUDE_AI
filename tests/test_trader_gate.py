@@ -6,12 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from alpaca_bot.gate import check_bash, check_mcp_tool, check_order
+from alpaca_bot.gate import POLICY, check_bash, check_mcp_tool, check_order
 from alpaca_bot.main import cmd_execute
 from alpaca_bot.trader_plan import load_plan, max_qty, plan_from_dict, validate_plan
 
 REPO = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 11, 16, 1, 0, tzinfo=timezone.utc)
+CLI = "alpaca order"  # split so this file's text is not mistaken for a command
 
 BASE = {
     "id": "btc-test",
@@ -101,14 +102,21 @@ def test_buy_with_valid_plan_allowed(plans):
     assert check_order(buy(), plans(), NOW).allow
 
 
+def test_market_buy_and_notional_allowed_within_plan_size(plans):
+    d = plans()
+    assert check_order(buy(type="market", limit_price=None), d, NOW).allow
+    assert check_order(buy(type="market", limit_price=None, qty=None, notional="40000"),
+                       d, NOW).allow
+
+
 @pytest.mark.parametrize("change, expected", [
     ({"client_order_id": None}, "no Trader plan reference"),
     ({"client_order_id": "ct-nope-e1a2b3"}, "no Trader plan file"),
     ({"symbol": "ETH/USD"}, "is for BTC/USD"),
-    ({"qty": "1"}, "exceeds"),
-    ({"type": "market", "limit_price": None}, "limit orders"),
+    ({"qty": "1"}, "2%-risk size"),
     ({"limit_price": "105000"}, "within 1%"),
-    ({"notional": "1000", "qty": None}, "notional"),
+    ({"notional": "90000", "qty": None}, "exceeds the plan's size"),
+    ({"type": "stop"}, "not allowed"),
 ])
 def test_buy_rejections(plans, change, expected):
     v = check_order(buy(**change), plans(), NOW)
@@ -126,54 +134,111 @@ def test_invalid_plan_blocks_buy(plans):
     assert not v.allow and "fase 4-5" in v.reason
 
 
-def test_protective_stop_must_be_at_plan_stop(plans):
+def test_stops_exits_and_trailing(plans):
     d = plans(status="open")
     stop = {"symbol": "BTC/USD", "side": "sell", "qty": "0.4884", "type": "stop_limit",
             "stop_price": "97480", "limit_price": "97190", "client_order_id": "ct-btc-test-s9f8e7"}
     assert check_order(stop, d, NOW).allow
-    moved = dict(stop, stop_price="95000")
-    assert "do not move the stop" in check_order(moved, d, NOW).reason
+    assert check_order(dict(stop, stop_price="99000"), d, NOW).allow  # moving stops allowed
+    trailing = {"symbol": "BTC/USD", "side": "sell", "qty": "0.4884", "type": "trailing_stop",
+                "trail_percent": "3", "client_order_id": "ct-btc-test-t1t2t3"}
+    assert check_order(trailing, d, NOW).allow
     exit_sell = {"symbol": "BTC/USD", "side": "sell", "qty": "0.4884", "type": "limit",
                  "limit_price": "109765", "client_order_id": "ct-btc-test-x1x2x3"}
     assert check_order(exit_sell, d, NOW).allow
     assert not check_order(exit_sell, plans(status="closed"), NOW).allow
+    assert not check_order(dict(trailing, client_order_id=None), d, NOW).allow
 
 
-def test_stock_bracket_must_match_plan(plans):
+def test_stock_bracket(plans):
     d = plans(id="spy-test", symbol="SPY", entry=500, target=540, logical_stop=481,
               stop=480, vacio_disponible=45, qty=100)
     o = {"symbol": "SPY", "side": "buy", "qty": "100", "type": "limit", "limit_price": "500",
          "order_class": "bracket", "stop_loss_stop_price": "480",
          "take_profit_limit_price": "540", "client_order_id": "ct-spy-test-e1a2b3"}
     assert check_order(o, d, NOW).allow
-    assert not check_order(dict(o, stop_loss_stop_price="450"), d, NOW).allow
+    assert check_order(dict(o, stop_loss_stop_price="450"), d, NOW).allow  # moving stops
+    assert not check_order(dict(o, stop_loss_stop_price=None), d, NOW).allow
 
 
 def test_mcp_tools():
-    assert not check_mcp_tool("mcp__Alpaca_Paper_Trading__place_option_order", {"qty": "1"}).allow
-    assert not check_mcp_tool("mcp__Alpaca_Paper_Trading__replace_order_by_id",
-                              {"order_id": "x"}).allow
+    tool = "mcp__Alpaca_Paper_Trading__"
+    assert not check_mcp_tool(tool + "place_option_order", {"qty": "1"}).allow  # no plan
+    assert check_mcp_tool(tool + "replace_order_by_id", {"order_id": "x"}).allow
     assert not check_mcp_tool("mcp__alpaca__place_crypto_order",
                               {"symbol": "BTC/USD", "side": "buy", "qty": "1"}).allow
-    assert check_mcp_tool("mcp__Alpaca_Paper_Trading__get_account_info", {}) is None
-    assert check_mcp_tool("mcp__Alpaca_Paper_Trading__cancel_order_by_id", {}) is None
+    assert check_mcp_tool(tool + "get_account_info", {}) is None
+    assert check_mcp_tool(tool + "cancel_order_by_id", {}) is None
 
 
-def test_bash_routes(plans):
+def test_cli_routes(plans):
     d = plans()
-    ok = ("alpaca order submit --symbol BTC/USD --side buy --qty 0.4884 --type limit "
+    ok = (f"{CLI} submit --symbol BTC/USD --side buy --qty 0.4884 --type limit "
           "--limit-price 101600 --client-order-id ct-btc-test-e1a2b3")
     assert check_bash(ok, d, NOW).allow
-    assert not check_bash("alpaca order submit --symbol AAPL --side buy --qty 10 --type market",
-                          d, NOW).allow
-    assert check_bash("alpaca order submit --symbol AAPL --side buy --qty 1 --dry-run", d) is None
-    assert not check_bash("alpaca order replace --order-id x --qty 2", d).allow
-    assert not check_bash("echo '{}' | alpaca api POST /v2/orders", d).allow
-    assert not check_bash("curl -X POST https://paper-api.alpaca.markets/v2/orders -d '{}'",
-                          d).allow
+    mkt = (f"{CLI} submit --symbol BTC/USD --side buy --qty 0.1 --type market "
+           "--client-order-id ct-btc-test-e1a2b3")
+    assert check_bash(mkt, d, NOW).allow
+    assert not check_bash(f"{CLI} submit --symbol AAPL --side buy --qty 10 --type market",
+                          d, NOW).allow  # no plan reference
+    assert check_bash(f"{CLI} submit --symbol AAPL --side buy --qty 1 --dry-run", d) is None
+    assert check_bash(f"{CLI} replace --order-id x --qty 2", d).allow
     assert check_bash("alpaca account get", d) is None
-    assert check_bash("alpaca order list", d) is None
+    assert check_bash(f"{CLI} list", d) is None
     assert check_bash("ls -la", d) is None
+
+
+def test_raw_api_orders_need_a_valid_plan(plans):
+    d = plans()
+    body = ('{"symbol":"BTC/USD","side":"buy","qty":"0.1","type":"market",'
+            '"time_in_force":"ioc","client_order_id":"ct-btc-test-e1a2b3"}')
+    api = "alpaca api POST /v2/orders"
+    assert check_bash(f"echo '{body}' | {api}", d, NOW).allow
+    assert not check_bash(f"echo '{body.replace(chr(34) + '0.1', chr(34) + '5')}' | {api}",
+                          d, NOW).allow  # qty 5 is over the plan size
+    no_plan = body.replace("ct-btc-test-e1a2b3", "manual-1")
+    assert not check_bash("curl -X POST https://paper-api.alpaca.markets/v2/orders "
+                          f"-d '{no_plan}'", d, NOW).allow
+    assert not check_bash(f"echo '{{}}' | {api}", d).allow
+    assert check_bash("curl -X PATCH https://paper-api.alpaca.markets/v2/orders/abc "
+                      "-d '{\"qty\":\"1\"}'", d, NOW).allow
+
+
+def test_options_tied_to_plan_on_underlying(plans):
+    d = plans(id="spy-opt", symbol="SPY", entry=500, target=540, logical_stop=481,
+              stop=480, vacio_disponible=45, qty=100, max_contracts=2)
+    single = {"symbol": "SPY261218C00520000", "side": "buy", "qty": "2", "type": "limit",
+              "limit_price": "4.10", "position_intent": "buy_to_open",
+              "client_order_id": "ct-spy-opt-o1a2b3"}
+    tool = "mcp__Alpaca_Paper_Trading__place_option_order"
+    assert check_mcp_tool(tool, single, d, NOW).allow
+    assert "max_contracts" in check_mcp_tool(tool, dict(single, qty="3"), d, NOW).reason
+    other = dict(single, symbol="AAPL261218C00200000")
+    assert "option is on AAPL" in check_mcp_tool(tool, other, d, NOW).reason
+    assert not check_mcp_tool(tool, dict(single, client_order_id=None), d, NOW).allow
+    spread = {"qty": "1", "client_order_id": "ct-spy-opt-o9z8y7", "legs": [
+        {"symbol": "SPY261218C00520000", "ratio_qty": "1", "side": "buy"},
+        {"symbol": "SPY261218C00540000", "ratio_qty": "1", "side": "sell"}]}
+    assert check_mcp_tool(tool, spread, d, NOW).allow
+    cli = (f"{CLI} submit --symbol SPY261218C00520000 --side buy --qty 1 "
+           "--type limit --limit-price 4.1 --client-order-id ct-spy-opt-o1a2b3")
+    assert check_bash(cli, d, NOW).allow
+
+
+def test_policy_switches_turn_blocks_back_on(plans, monkeypatch):
+    for key in POLICY:
+        monkeypatch.setitem(POLICY, key, False)
+    d = plans(status="open")
+    assert not check_mcp_tool("mcp__x_alpaca__replace_order_by_id", {"order_id": "x"}).allow
+    assert not check_order(buy(type="market", limit_price=None), plans(), NOW).allow
+    trailing = {"symbol": "BTC/USD", "side": "sell", "qty": "0.1", "type": "trailing_stop",
+                "client_order_id": "ct-btc-test-t1t2t3"}
+    assert not check_order(trailing, d, NOW).allow
+    moved = {"symbol": "BTC/USD", "side": "sell", "qty": "0.1", "type": "stop",
+             "stop_price": "90000", "client_order_id": "ct-btc-test-s1s2s3"}
+    assert not check_order(moved, d, NOW).allow
+    assert not check_mcp_tool("mcp__x_alpaca__place_option_order", {"qty": "1"}).allow
+    assert not check_bash("alpaca api POST /v2/orders ct-btc-test-e1a2b3", d).allow
 
 
 # ------------------------------------------------------------- executor
@@ -195,7 +260,7 @@ def test_execute_cuts_size_when_balance_fell(plans):
             return "e1"
 
         def filled_qty(self, oid):
-            return "filled", float(self.qty)
+            return "filled", 0.43956
 
         def submit_stop(self, symbol, qty, stop, limit, cid):
             self.stop_qty = qty
@@ -203,7 +268,6 @@ def test_execute_cuts_size_when_balance_fell(plans):
 
     d = plans(created_at=datetime.now(timezone.utc).isoformat())
     b = B()
-    b.qty = "0.43956"
     out = cmd_execute("btc-test", submit=True, broker=b, plans_dir=d)
     assert float(out["entry_order"]["qty"]) < 0.4884
     assert out["stop_order_id"] == "s1" and b.stop_qty == 0.43956

@@ -19,6 +19,7 @@ Each file `<plan_id>.json` is the written result of one Trader skill analysis. A
 | `vacio_disponible` | Distance from the entry to the first opposing 1st/2nd-grade level |
 | `balance`, `risk_pct`, `simultaneous_trades` | Current balance, risk (at most 0.02), and how many trades share that risk |
 | `qty` | Size: `balance × risk_pct ÷ simultaneous_trades ÷ (entry − stop)`, rounded down |
+| `max_contracts` | Optional. Most option contracts any single order on this plan may use (the analysis is on the underlying) |
 | `analysis` | The Trader output (structured template), including INFERRED/UNKNOWN items |
 | `log` | Actions and results |
 
