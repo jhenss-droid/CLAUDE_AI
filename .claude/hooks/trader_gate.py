@@ -11,6 +11,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
+sys.dont_write_bytecode = True  # keep __pycache__ out of the synced folder
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
 
 
 def decide(allow: bool, reason: str) -> None:
@@ -26,12 +32,14 @@ def decide(allow: bool, reason: str) -> None:
 
 def main() -> None:
     try:
-        event = json.load(sys.stdin)
+        # Read raw bytes as UTF-8: Windows would otherwise decode stdin with its
+        # legacy code page and mangle non-ASCII text.
+        event = json.loads(sys.stdin.buffer.read().decode("utf-8"))
         tool = event.get("tool_name", "")
         tool_input = event.get("tool_input") or {}
         from alpaca_bot.gate import check_bash, check_mcp_tool
 
-        if tool == "Bash":
+        if tool in ("Bash", "PowerShell"):
             verdict = check_bash(str(tool_input.get("command", "")))
         else:
             verdict = check_mcp_tool(tool, tool_input)

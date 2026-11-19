@@ -135,7 +135,7 @@ def load_plan(plan_id: str, plans_dir: Path = DEFAULT_PLANS_DIR) -> Plan:
     if not path.is_file():
         raise PlanError(f"no Trader plan file {path.name} in {plans_dir.name}/")
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         raise PlanError(f"{path.name} is not valid JSON: {exc}") from exc
     plan = plan_from_dict(data)

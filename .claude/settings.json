@@ -2,12 +2,14 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "mcp__.*[Aa]lpaca.*|Bash",
+        "matcher": "mcp__.*[Aa]lpaca.*|Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/trader_gate.py\"",
-            "timeout": 15
+            "command": "sh \"${CLAUDE_PROJECT_DIR}/.claude/hooks/run_gate.sh\"",
+            "shell": "bash",
+            "timeout": 20,
+            "onFailure": "block"
           }
         ]
       }

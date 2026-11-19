@@ -1,7 +1,14 @@
 """Credentials. Paper trading is hard-wired: nothing here can select a live account.
 
-Keys come from a `.env` file in the repository folder when it exists (it is
-git-ignored, so it is never pushed), otherwise from environment variables.
+Where the keys come from, first match wins (an empty value is skipped):
+
+1. ``.env`` in the project folder. It is git-ignored, but if the project lives
+   in Google Drive this file is synced to Google along with everything else.
+2. ``.alpaca_bot.env`` in your home folder (``C:\\Users\\<you>`` on Windows,
+   ``~`` on macOS/Linux). It stays on that one computer: recommended when the
+   project folder is in Google Drive.
+3. The ``ALPACA_API_KEY`` / ``ALPACA_SECRET_KEY`` environment variables
+   (used by Claude Code cloud sessions).
 """
 
 from __future__ import annotations
@@ -11,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+HOME_ENV_FILE = Path.home() / ".alpaca_bot.env"
 
 
 def read_env_file(path: Path = ENV_FILE) -> dict[str, str]:
@@ -18,12 +26,15 @@ def read_env_file(path: Path = ENV_FILE) -> dict[str, str]:
     values: dict[str, str] = {}
     if not path.is_file():
         return values
-    for line in path.read_text().splitlines():
+    # utf-8-sig also reads files that Windows Notepad saved with a BOM.
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        key = key.strip().removeprefix("export ").strip()
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
         value = value.strip().strip('"').strip("'")
         if key:
             values[key] = value
@@ -36,18 +47,23 @@ class Settings:
     secret_key: str = ""
 
     @classmethod
-    def from_env(cls, env_file: Path = ENV_FILE) -> "Settings":
-        file_values = read_env_file(env_file)
+    def from_env(cls, env_file: Path = ENV_FILE,
+                 home_env_file: Path | None = None) -> "Settings":
+        sources = [read_env_file(env_file), read_env_file(home_env_file or HOME_ENV_FILE)]
 
         def get(name: str) -> str:
-            # A non-empty value in .env wins over the environment variable.
-            return file_values.get(name) or os.environ.get(name, "")
+            for values in sources:
+                if values.get(name):
+                    return values[name]
+            return os.environ.get(name, "")
 
         return cls(api_key=get("ALPACA_API_KEY"), secret_key=get("ALPACA_SECRET_KEY"))
 
     def validate(self) -> None:
         if not self.api_key or not self.secret_key:
             raise SystemExit(
-                "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set (paper keys; when the "
-                "proxy injects them, set both to 'proxy-injected')."
+                "Alpaca paper keys not found. Put ALPACA_API_KEY and ALPACA_SECRET_KEY in "
+                f"{HOME_ENV_FILE} (recommended) or in {ENV_FILE}, or set them as environment "
+                "variables. In Claude Code cloud sessions, set ALPACA_SECRET_KEY to "
+                "'proxy-injected'."
             )
